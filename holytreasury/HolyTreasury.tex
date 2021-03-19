@@ -1,0 +1,603 @@
+\title{Holyheld: Treasury implementation v0.1 (draft)}
+
+\author{
+        Anton Zagorodnikov (antzagos@gmail.com) \\
+        Anton Mozgovoy (a@mozgovoy.me) \\
+}
+\date{}
+
+\documentclass[12pt]{article}
+
+\usepackage{graphicx}
+\usepackage{bytefield}
+\usepackage{makecell}
+\usepackage{auto-pst-pdf}
+\usepackage{amsmath}
+
+\usepackage[ruled,vlined]{algorithm2e}
+
+\usepackage{hanging}
+
+\usepackage{tikz}
+\newcommand*\circled[1]{\tikz[baseline=(char.base)]{
+            \node[shape=circle,draw,inner sep=2pt] (char) {#1};}}
+
+\usepackage[]{hyperref}
+\hypersetup{
+    pdftitle={Holyheld: Treasury implementation v0.1 (draft)},
+    pdfauthor={antzagos@gmail.com},
+    pdfsubject={solidity},
+    pdfkeywords={blockchain, ethereum, solidity, smart contracts},
+    bookmarksnumbered=true,
+    bookmarksopen=true,
+    bookmarksopenlevel=1,
+    colorlinks=true,
+    pdfstartview=Fit,
+    pdfpagemode=UseOutlines,
+    pdfpagelayout=TwoPageRight
+}
+
+\begin{document}
+\maketitle
+
+\textbf{\footnotesize Legal Disclaimer}\scriptsize
+~~Nothing in this article is an offer to sell or the solicitation of an offer to buy any tokens. Holyheld is publishing this article solely to receive feedback and comments from the public.
+
+Nothing in this article should be treated or read as a guarantee or promise of how Holyheld’s business or the tokens will develop, or the utility of the tokens and smart contract functions. This article outlines current plans, which could change at its discretion. And the success of which will depend on many factors outside Holyheld’s control, including but not limited to market-based conditions and factors within the data and cryptocurrency industries. Any statements about future events are based solely on Holyheld’s analysis of the issues described in this article. That analysis may prove to be incorrect.
+
+\begin{abstract}
+This article describes principles of Holyheld Treasury operation, a component of infrastructure, which purpose is to accumulate value that users can spend on different activities (such as transaction subsidizing, operational fees compensation, etc.) and also serve as an asset pool that backs the value of Holyheld tokens (a portion of this value can be realized by the user through one-time token burn). The goal of the article is to describe Holyheld Treasury's main mechanics, possible action flows, implementation considerations, and interaction with other Holyheld infrastructure components.
+\end{abstract}
+
+
+\section{Treasury concepts}\normalsize
+
+Tokenomics of the Holyheld project \cite{holyheld2021} is including several features that are coupled with the concept of Holyheld Treasury:
+\begin{itemize}
+\item An incentive to hold for product users: holders of Holyheld Token (hereinafter HH) are accumulating rewards in the form of (currently) USDC token, which cannot be withdrawn directly, but could be used for subsidizing gas cost when performing a transaction for ERC20 token swap or transfer, covering costs for off-chain operations related to a debit card, etc. This differs from several projects, where the token is the bonus itself and is issued (minted) as rewards without any peg;
+\item An incentive to hold as a form of cashback on the user capital: a portion of profits generated on user assets is allocated to Treasury. HH token portion could be 'burned', realizing a portion of this pool, decreasing the number of circulating tokens, therefore, allowing for one-time payout rewards for discontinuing usage of the service.
+\end{itemize}
+
+From one point of view, this implies that HH token has a 'book value', that is backed by the value of Treasury and from the other point of view, the market value HH of the token should NOT be seen as a reflection of Holyheld's ability to generate yield (and for bonus portion, the value of its product features).
+
+\bigskip
+
+
+\subsection{Treasury use cases}
+
+\begin{itemize}
+	\item Staking and unstaking supported token types into Treasury
+		\begin{itemize}
+			\item During deposits users can deposit HH and HH-LP (in a single transaction);
+      \item During withdrawals users can withdraw HH and HH-LP (in a single transaction), keeping earned bonus amount;
+		\end{itemize}
+	\item Holyheld bonus
+    \begin{itemize}
+      \item ERC20 Holyheld Bonus token;
+			\item Claiming any portion of pending rewards as a Holyheld Bonus token;
+      \item Spending a bonus for supported actions (subsidized transactions and other activities);
+		\end{itemize}
+	\item Reward distribution processing -- when reward distribution occurs, we count accumulated bonus per staked share and call recalculation (\ref{subsec:bonus_calculation}), because it's not dependent on several blocks (and can occur in random periods) and varies in numerical value.
+	\item Claim \& Burn action -- HH token can be burned from Treasury stake and user balance (or in any proportion of those). This would realize a one-time USDC profit of currently an unspent bonus of user + (4x endowment treasury portion);
+  \item Rebalancing of assets
+    \begin{itemize}
+			\item Provide ETH on demand for execution wallets;
+			\item Rebalance between USDC/ETH/yield-generating assets when thresholds are not met (including deposit/withdraw of USDC into yield-generating pools);
+    \end{itemize}
+\end{itemize}
+
+
+
+\subsection{Treasury Asset Allocation}
+
+Treasury assets are divided into two portions: endowment (long-term fund) and bonus pool (assets backing bonuses).
+
+\bigskip
+
+Endowment fund exists because of the following reasons:
+\begin{itemize}
+\item To have a reserved portion that would generate yield on treasury itself;
+\item To incentivize long-term holding even if bonuses/products are not used;
+\item To have a Holyheld Bonus token backed by (at least) endowment;
+\item Everything comes to end eventually, even the stars and probably the universe itself. However, for as long as the Ethereum network will be operational, the treasury would be able to give its assets for HH tokens burn, regardless of other contracts and infrastructure (check how to provide vault safety override to distribute staked assets in case of an emergency event);
+\end{itemize}
+
+The treasury has the following subdivision of assets:
+\begin{itemize}
+\item 50\% Endowment threshold. Treasury value may not go below this threshold, even if
+  all bonuses are used. This portion is only claimable through HH token burn.
+  Endowment is usually fully invested in Holypools for the yield generation;
+\item 50\% Bonus pool (portion used for bonus coverage)
+  \begin{itemize}
+    \item A\% of reserves in USDC on the smart contract balance;
+    \item B\% of reserves in ETH for gas coverage on the 'execution wallets';
+    \item C\% of reserves invested in Holypools for yield generation;
+  \end{itemize}
+\end{itemize}
+
+\begin{figure}[h]
+  \begin{center}
+    \centering
+    \includegraphics[width=1.075\textwidth]{HolyTreasuryAssetAllocation.ps}
+    \caption[Figure 1]{HolyTreasury asset allocation\label{fig:ht_asset_alloc}}
+  \end{center}
+\end{figure}
+
+Endowment percentage proportion to overall treasury size is defined using variable $T_{\mathit{endowment}}$ (\texttt{endowment\_percent}). This primarily defines \emph{a proportion in which realized profits are accounted in Treasury}.
+
+As Treasury overall assets quantity is dynamic and may significantly differ from defined proportion due to usage of bonuses to cover gas spending and because of asset distribution (across base asset (USDC), ETH (on gas subsidy wallets) and yield-generating assets), a separate variable $V_{e}$ (\texttt{endowment\_size}) is used for accounting of endowment asset value. This also would allow changing \texttt{endowment\_percent} value without introducing accounting errors. Additionally for accounting to avoid bonus balances and bonus token balances maps iteration for rebalancing checks and other calculations variable $V_{b}$ (\texttt{bonuspool\_size}) is defined.
+
+Total amount of Treasury assets could be represented by this equation:
+\begin{equation}
+V_{total}^{\mathit{USDC}} = V_{e} + V_{b} = \sum^{\mathit{USDC}}_{\substack{yield\\assets}} + \mathit{USDC}_{\substack{contract\\balance}} + \sum^{\mathit{USDC}}_{\substack{subsidy\\wallets}}(\mathit{ETH})
+\end{equation}
+
+From one side, $V_{e} + V_{b}$ represent endowment and bonus pool portions (used for accounting), from the other side, assets are allocated to keep a balance between immediate accessibility (ETH) and the ability to generate yield (reserve variables would be monitored and could be changed by balancer service).
+
+The number of wallets used for subsidized transaction execution contains ETH and serves as an immediate gas reserve for executing subsidized transactions. It could be filled from treasury contract by balancer service or when required on immediate demand. Overall reserves for ETH has a settable value (\texttt{reserve\_eth});
+
+Treasury has a settable USDC reserve value (\texttt{reserve\_base\_asset}) to be able to provide USDC without conversion overhead when required;
+
+Therefore, treasury seeks to generate yield for itself, while keeping USDC reserve
+and ETH reserve for cheaper subsidized transaction logistics (and Claim \& Burn actions). Treasury itself is staking its portion (endowment plus any other funds in USDC that are above-defined USDC and ETH reserves);
+
+Treasury endowment keeps accounting of its size $V_{e}$ and should never decrease it except Claim \& Burn events.
+
+While using earned bonuses depletes ETH (and eventually, USDC/yield-generating reserves), the percentage portion of bonus pool of Treasury for yield distribution is computed as $T_{\mathit{bonus}} = 100\% - T_{\mathit{endowment}}$ (and getting this portion of profits);
+
+
+
+\subsection{Arbitrage considerations}
+
+As the aim for the platform is to be sustainable, in case of arbitrage opportunities emerge, they should switch balance (HH token price), but not break the tokenomics model:
+
+1. If burn value is \emph{higher} than market value, then it is reasonable to burn the token and buy it on the market;
+(Burning multiplier would gradually decrease 'book value' from one side and buying it would increase its market price from the other side, so the new balance should be found in-between).
+
+2. If burn value is \emph{lower} than market value, then token has a premium to book value due to valuation of Holyheld operations as a business, As Treasury performs depositing of itself into yield-generating products, its value should increase even if the volume of other profits is low. The balance between holding due to forward profits participation and valuation of bonuses for in-product use would be found by the market by itself.
+
+
+\subsection{Functional areas breakdown}
+
+The contract for Treasury contains several functional areas, that should be separated and orthogonal \cite{wiki_orthogonal} to reduce security risks and possible side-effects of system behavior.
+
+\begin{itemize}
+\item Bonus balance accounting: staking/unstaking supported tokens;
+\item Distribution of yield to bonus and endowment portion, recalculation of valuations and APY metrics;
+\item Rebalancing of allocation of Treasury assets between a base asset (USDC), ETH hot reserve and yield-generating portions (fulfill USDC and ETH reserves using yield-generating tokens (if their evaluation) is larger than defined amounts; refill ETH reserve from USDC; invest a portion of USDC assets if the amount exceeding reserves is large enough for the operation to be reasonable, etc.)
+\item Claiming treasury portion through HH token burn;
+\item Getting ETH for subsidizing a transaction (in case ETH contract needs it);
+\item ERC20 functions of Holyheld Bonus Token (same contract to avoid allowance costs) and claiming pending bonus as token functions;
+\item Administration functions (rebalancing thresholds);
+\item Emergency recover functions (timelocked);
+\end{itemize}
+
+
+
+\section{Subsidized transactions}
+
+
+By subsidized transactions, we would mean a transaction that is initiated by the user as an action that changes user wallet token balances or user interaction with the Holyheld system. This can include: sending ERC20 tokens, exchanging (swapping) ERC20 tokens, performing deposits and withdrawals in Holyheld yield-generating products, and interaction with Treasury itself (deposits, withdrawals of HH or HH-LP tokens, and HH token burn for claiming a portion of Treasury assets). The term 'subsidized' means that transaction fees (gas fees) are covered for the user.
+
+
+\subsection{Possibility of subsidized transactions}
+
+
+At the time of writing, Ethereum does not provide means to execute transactions with gas provided by another party. But, while having some limitations, such functionality can be implemented. Numerous approaches have emerged, notably the GSN (Gas Station Network) \cite{gasstationnetwork}.
+
+Holyheld uses similar approach to GSN, which can be concisely described as following steps:
+\begin{itemize}
+\item A user makes a decision to create a transaction. The application determines if such transaction is able to be subsidized technically and if estimated gas expenses cost less than amount user has available as bonus;
+\item A user signs a message with his private key. The message itself is transparent and clearly states the purpose of the transaction, allowing to match it with the real contract interaction that follows. This serves as a two-way trust: as proof to a system that execution was initiated by the user as the only user has a particular private key, and (the message signatures should be stored persistently) the system can prove to the user that the action was executed because of his signature for a particular timestamped action.
+\item Signed message and intended transaction content are sent to a backend relay which performs validation checks and initiates a transaction from a wallet holding Eth and providing gas subsidy.
+\end{itemize}
+
+The following transaction types \emph{cannot} be subsidized:
+\begin{itemize}
+\item Raw transfers of Ethereum. There is no mechanism to access ETH on user address (EOA) currently present;
+\item General third-party smart contract interactions: while some methods in some smart contracts are agnostic to transaction sender, in general, many are relying on \texttt{msg.sender}, which would be the address of the backend-controlled wallet. Exceptions could be added manually for possible cases.
+\end{itemize}
+
+The following transaction types \emph{can} be subsidized:
+\begin{itemize}
+\item Sending of ERC20 tokens to any address;
+\item Swapping of ERC20 tokens using Holyheld swap feature;
+\item Depositing/withdrawal of appropriate ERC20 tokens into Holyheld yield-generating products or Treasury;
+\item Burning of HH tokens to receive Treasury portion;
+\end{itemize}
+
+
+\subsection{Execution requirements}
+
+
+Subsidized transactions that require the transfer of ERC20 tokens on the balance of the user wallet could be executed only if sufficient allowance is provided for the Holyheld transfer proxy. Therefore, approval of spending a particular ERC20 token transaction should be executed from the user wallet directly beforehand. The approval amount could be set from minimal value (to execute single action) to larger value (to avoid approval costs for further interactions), depending on security concerns.
+
+Some tokens support the ERC20 Permit feature (EIP-2612) \cite{erc20permit}. It allows executing approval from a third-party transaction for an EOA given the signed message (that is verifiable on-chain). In such a case, the approval step can be included in the subsidized transaction itself.
+
+
+\subsection{Transaction creation and verification}
+
+
+Backend should verify (at least) the following information to prevent malicious usage or exploiting the system:
+\begin{itemize}
+\item Match of signature and address provided;
+\item Signed message contests must be parsed and meet the transaction information provided;
+\item It should be possible to estimate transaction gas fees;
+\item User (address) should have enough bonuses to cover transaction gas costs;
+\item Backend-controlled wallet should have enough ETH to cover transaction gas costs;
+\item Provided gas price should be reasonably high to avoid stalled transactions;
+\item Holyheld transfer proxy should have sufficient allowance to spend ERC20 tokens if the transaction requires such interaction or appropriate (EIP-2612 Permit) signed message is provided along with transaction creation request;
+\end{itemize}
+
+
+
+\subsection{Security and parallelism considerations}
+
+
+As a single address (wallet) on ETH network can only send transactions sequentially, one by one, each increasing \texttt{nonce} value, submitting a transaction with a low gas price (that could be done deliberately or unintentionally (gas price quickly rises after submission) could lead to a situation, when a backend-controlled wallet could not send other transactions (they would just be queued), blocking the function for other users.
+
+This can be mitigated partially or completely with following measures:
+\begin{itemize}
+\item Have several backend-controlled wallets with Eth reserves that initiate subsidized transactions. This would not eliminate the issue, but would make the system more robust and stable, allowing to handle a higher rate of subsidized transactions;
+\item Restricting gas price that user can select to submit subsidized transaction (either completely or use some safety threshold);
+\item Having backend to cancel transactions that are pending longer than some preset amount of time (overlapping transaction with empty transfer transaction having same \texttt{nonce}, using a gas price that is high enough). Cancellation would require some small amount of gas too and should cost less in gas fees than submitted transaction (except huge gas price spike in a short time, but the likeness of this event probably can be excluded from consideration).
+\end{itemize}
+
+Front-running subsidized transactions for a user is possible, but only if initiated by the user himself (or having provided allowance) and is not economically viable or exploitable.
+
+For example, a user submits a \texttt{SEND} order of token $T$ to an address $A$ as a subsidized transaction through Holyheld backend and immediately after that submits a direct transaction to send all token $T$ to address $B$ with the higher gas price. If the latter transaction gets executed before the subsidized one, the subsidized transaction would revert because of an insufficient balance of $T$. This, however, occurs from the user's consent (or if the user-provided access to token $T$ to an external entity), so we won't be treating this as a security vulnerability.
+
+
+\subsection{Backend execution}
+
+Worker thread serving subsidized transactions can follow approximately this logic (very high-level definition), objects manipulation should be thread-safe:
+
+\begin{algorithm}[H]
+\SetAlgoLined
+\KwResult{ Pick up and submit transactions from request queue }
+ initialization (connect to Infura, queue, db, retrieve wallets)\;
+ \While{service is active}{
+  \If{pending actions on wallets}{
+   check for timeouts and cancelling settings\;
+   \If{stalled transaction}{
+     cancel pending tx that are stuck for too long (by sending empty data Eth transaction)
+   }
+  }
+  \While{queue has requests AND free wallets available}{
+    check conditions and that request did not timed out and no other requests from this addr pending\;
+    validate request (including gas price check)\;
+		try other free wallets if balance on current is insufficient\;
+		\If{free wallets available, but none with sufficient balance}{
+			retrieve Eth from Treasury contract\;
+		}
+    execute subsidized transaction\;
+  }
+  \If{no free wallets available for given time treshold}{
+  	perform alerting activities\;
+  }
+  sleep/idle time quant\;
+ }
+ \caption{Subsidized execution worker thread}
+\end{algorithm}
+
+\section{Holyheld Bonus Token}
+\label{sec:bonus_token_section}
+
+To keep gas expenses minimal, bonus amounts are reflected through values inside of the HolyTreasury contract as a pending bonus and issued as Holyheld Bonus tokens upon staking or unstaking of token types accepted by the Treasury. Bonuses are backed by USDC (for initial implementation, other stablecoins may be considered in the future), but not directly claimable as USDC tokens. Nonetheless, users can claim bonuses as ERC20 Holyheld Bonus Token. This would make bonuses more robust:
+\begin{itemize}
+\item Bonuses can be transferred between wallets and users;
+\item Bonus token can be traded, bought, and sold, e.g. via decentralized exchanges;
+\item There is an incentive to get more bonuses even if their direct use is not intended;
+\item Various actions, NFT items, and other activities can be implemented requiring a certain number of bonus tokens to be provided (and burned);
+\item When making subsidized transactions, bonuses accounted in HolyTreasury (used in first-order) and bonus tokens on the wallet balance (used in second-order) can be used together seamlessly;
+\end{itemize}
+
+
+\subsection{Bonus calculation mechanics}
+\label{subsec:bonus_calculation}
+
+To concisely describe the calculation of bonus tokens accounting, a summary of \cite{batog,solmaz}:
+
+Consider a reward program where shares are of a single type and total rewards for participants are allocated at a constant rate per time (block). $shares$ is an overall number of shares, where $share_{j}$ is the particular number of shares the user has staked.
+
+reward for a particular interval can be described by
+\begin{equation}
+	reward_{t-1,t} = shares_{j}/shares_{\mathit{total}} * reward_{\mathit{block}}
+\end{equation}
+
+overtime, the $shares_{\mathit{total}}$ change, but keeping the history of such changes could be avoided by calculating accumulated reward per share. Whenever rewards arrive (and per-block rewards use every user deposit or withdrawal call for calculation, as there are no scheduled smart contract calls in Ethereum) a variable that holds accumulated rewards per single share is increased. If there 2x shares for some period, with the same total reward for it, a reward per share increase would be 1/2x. Combined with the mechanics described below, this allows avoiding storing of historical data for overall and per-user shares amounts.
+
+Upon every deposit or withdrawal of a user $j$, a value of $reward_tally_{j}$ (rewardDebt) is calculated and stored. All the pending rewards are paid just before that calculation, and essentially, rewardTally sets \emph{zero-point mark}, matching that
+
+\begin{equation}
+	reward_{\mathit{pending}} = shares_{j} * accumulated\_reward_{\mathit{per\_share}} - reward_{\mathit{tally}} = 0,
+\end{equation}
+
+where shares\_number is \emph{current} shares number after deposit or withdrawal.
+(like if user was holding current $shares_{j}$ from the beginning, and just had claimed all his rewards).
+
+Temporal effects of harvesting all pending bonuses when making deposits or withdrawals should not be underestimated: it allows to set 'zero' watermark for a current user standing in regards to accumulated bonus per share. It is possible to recalculate $reward\_tally$ offset for deposits/withdrawals, scaling it to the new number of $shares_{j}$ while keeping the currently pending bonus value unchanged. Withdrawing all shares while having a pending bonus would result in this value being negative.
+Thus 'harvesting' of reward during deposit or withdrawal is not only a feature of the approach but serves for simplification, which allows setting 'zero-point' mark with $reward\_tally$, offloading current reward 'chunk' results to another variable (reward balance or minting reward as in \cite{sushichef}), instead of re-scaling it to match currently pending reward.
+
+To summarize: every deposit or withdrawal would first, increase the accumulated reward for the interval between such actions, and second, reset zero marks for the particular user to a new value (realizing pending rewards). This accounts for changing share size from the user side. From the other side, calculating accumulated reward \emph{per share} (acc\_reward\_per\_share) accounts for changing the overall number of shares, taking into consideration staking and unstaking actions of other users.
+
+This approach has a computational complexity of $O(1)$ and storage requirements of 3 variables per user (reward\_tally and share\_amount, issued bonus or minted tokens amount being the third), making it a viable solution to be implemented in smart-contracts, given their constraints.
+
+This has been done in production numerous times and implementations that use 'multiple staking pools' \cite{sushichef} have separate calculations for every token that can be staked and pools having 'weights' when rewards are distributed (rewards flow is constant, distribution proportion is defined by pool weights), but that does not change calculation mechanics significantly.
+
+\bigskip
+
+The mechanics of rewards (bonus) distribution is closely following approach described in \cite{solmaz}, with one additional assumption: $\mathit{stake}_{j}$ represents stake of a particular user's \emph{LP token type} (e.g. for $\mathit{HH}$ and $\mathit{HH{\text -}LP}$):
+
+\begin{equation}
+  \begin{split}
+    \mathit{stake}_{j_{\mathit{HH}}}=\frac{\mathit{HH}_{address}}{\mathit{HH}_{\substack{staked\\total}}} * w_{\mathit{HH}};
+  \end{split}
+\quad
+  \begin{split}
+    \mathit{stake}_{j_{\mathit{HH{\text -}LP}}}=\frac{\mathit{HH}^{LP}_{address}}{\mathit{HH}^{LP}_{\substack{staked\\total}}} * w_{\mathit{HH{\text -}LP}},
+  \end{split}
+\end{equation}
+
+where $w_{\mathit{HH}}$ is the share weight of single staked HH token and $w_{\mathit{HH{\text -}LP}}$ (values are expected to be $w_{\mathit{HH}}=1.0$ and $w_{\mathit{HH-LP}}=2.5$ at the moment of writing).
+
+
+Fixing the weights and accepted token types from the beginning would allow to have single $\mathit{reward_tally}$ variable per user or e.g. represent the staked assets issuing a single 'reward-bearing' token (not considering the complexity of converting such token back to some proportion of HH/HH-LP), but would make the solution less flexible.
+
+To be able to change weights without recalculation or have the ability to extend supported token types (and as we should account deposited HH and HH-LP tokens separately in any case), the values of $\mathit{reward\_tally}$ (\texttt{rewardDebt} in \cite{sushichef}) are calculated and stored separately per token type, as do accumulated rewards. This matches the multiple 'staking pools' approaches in \cite{sushichef}. Otherwise (with single reward\_tally), decreasing of relative token type weight would decrease pending reward for stakes of that token type, while increasing the pending reward for other token types).
+
+\bigskip
+
+One difference from mentioned approaches is that rewards are used (spent) at arbitrary time when required (regardless of mechanics: through manual claim as ERC20 Holyheld Bonus token, subsidized transaction or other means) and that includes 'pending' rewards (not claimed in the form of token). Pending bonuses are spent in the first order and Holyheld Bonus tokens are used in conjunction if pending bonus amount is not enough. Full spending of pending bonus is equal to harvesting it during deposit or withdrawal, while partial pending bonus usage by increasing reward tally to:
+\begin{equation}
+	reward_{\mathit{tally}} = reward_{\mathit{tally}} + (stake_{j} * acc_reward_{\mathit{per\_share}}) * \frac{bonus\_to\_spend}{pending_{j}},
+\end{equation}
+where $bonus\_to\_spend/pending_{j}$ defines spending fraction or equals 1 when bonus is to be fully spent. The nuance is that pending calculations are separate for token type, therefore:
+\begin{equation}
+	bonus\_to\_spend_{HH} = bonus\_to\_spend * \frac{pending_{\mathit{HH}}}{pending_{\mathit{HH}} + pending_{\mathit{HH{\text -}LP}}},
+\end{equation}
+where pending reward is defined in (2), if no pending reward available, $reward\_tally$ value is not increased.
+
+As was mentioned, during staking and unstaking assets into Treasury, pending reward amount for the interval between such actions could be offloaded to some 'reward balance' variable to keep calculations simpler.  This mechanic could be avoided by rescaling $reward\_tally$ for new share value (7) to match the same pending bonus, saving the cost of changing and storing the value of one more variable:
+\begin{equation}
+	reward_{\mathit{tally}}^{new} = reward_{\mathit{tally}}^{old} + acc\_reward_{\mathit{per\_share}} * (\Delta stake_{j}),
+\end{equation}
+where $\Delta stake_{j}$ is a change of staked amount for a token type.
+
+In any case, if we need to increase some balance variable, it is semantically (and by gas usage) close to minting a token (Holyheld Bonus token, \ref{sec:bonus_token_section}), compacting concepts of pending bonus/bonus balance/bonus tokens to just pending bonus/bonus tokens. The user still could claim a pending bonus as a Holyheld Bonus token at any time (not just during deposits/withdrawals). Architecture-wise, it's more rational (security concerns, calculation, and token logic separation, etc.) to have Holyheld Bonus token harvested whenever possible, than save a tiny amount of gas on deposit/withdraw operations, plus, that would make Holyheld bonus token more liquid.
+
+\bigskip
+
+The other difference is that rewards do not come at a constant rate (e.g. per block), but when yield distribution occurs.
+Therefore, accumulated bonus per share ($accumulated\_bonus_{\mathit{per\_share}}$) is recalculated not when the user performs deposit or withdraw, but during yield distribution tx. Because such events occur at a random time, this imposes the following behavior: upon yield distribution, bonuses are allocated for the number of staked assets present \emph{at that particular moment}, they are not distributed at a continuous rate.
+
+\begin{figure}[h]
+  \begin{center}
+    \centering
+    \includegraphics[width=0.75\textwidth]{HolyTreasuryDistributeInterval.ps}
+    \caption[Figure 2]{HolyTreasury distribute interval\label{fig:ht_yield_interval}}
+  \end{center}
+\end{figure}
+
+At the time of writing, it is considered acceptable that if the deposit and withdraw of a certain amount are done between yield distribution events, then bonuses won't be awarded for staking of that particular amount (Fig.  \ref{fig:ht_yield_interval}), but would be awarded for the staked amounts present at $t_{0}$ and $t_{3}$ (for real use scenario, intervals between deposits and withdrawals like $t_{2} - t_{1}$ are expected to be at least order of magnitude longer than intervals between yield harvests $t_{3} - t_{0}$).
+
+
+
+
+
+
+
+\section{Treasury claiming}
+
+
+
+\subsection{Claim-and-burn concept and limitations}
+\label{subsec:claim_and_burn}
+
+As mentioned earlier, Treasury allows performing a 'claim-and-burn' action, meaning a portion (or whole) amount of HH tokens on user's wallet balance along with a portion (or whole) amount of HH tokens staked in Treasury could be burned (destroyed) and for such action, a portion of Treasury \emph{endowment fund} would be paid.
+
+This action would result in less HH tokens circulating supply and a higher level of participation in future profits distribution. Because of such factors, a claim-and-burn operation is planned to be implemented with a multiplier:
+\begin{equation}
+	V_{\mathit{received}} = \frac{\mathit{HH}_{\mathit{burned}}}{\mathit{HH}_{\mathit{circ.supply}}} * V_{\mathit{treasury}}^{\mathit{USDC}} * m_{b},
+\end{equation}
+where $m_{b}$ (\texttt{burn\_multiplier}) is expected to be 4.0 at the time of writing. $\mathit{HH}_{\mathit{circ.supply}}$ is the overall HH token circulating supply, not only the staked HH tokens portion.
+
+This would mean, for example, that burning 50\% of HH circulating supply results in getting 200\% of endowment, which is unachievable. To prevent such scenarios and involved risks, in single claim-and-burn operation \emph{maximum 5\% of the circulating supply could be burned}, still, receiving a significant 20\% of Treasury endowment.
+
+
+
+\subsection{Treasury claim and bonuses}
+
+The important difference between Holyheld (HH) token and Holyheld Bonus Token is that Holyheld Bonus Token is minted when the user wants to claim some bonus amount as a token (minting is backed by treasury assets). The amount of HH tokens is fixed and only decreases through the token burn.
+
+If HH token is burned for treasury portion, the portion of bonuses collected by the address performing the burn  \emph{would be included up to 100\% of treasury portion value received for burning HH token}. For example:
+\begin{itemize}
+\item A user has 100 bonuses (recorded in Treasury contract), 20 HH tokens, and 30 Holyheld Bonus Tokens;
+\item The user performs 'Claim \& Burn' on 10 HH tokens for a reward of treasury value of 50 USDC (this sets the upper limit of bonus conversion to 50 USDC);
+\item During the Claim \& Burn action, 50 of the 100 user bonuses are reclaimed along as USDC;
+\item After the Claim \& Burn action, the user has +100 USDC, 50 bonuses, 10 HH tokens, 30 Holyheld Bonus Tokens;
+\end{itemize}
+
+
+\section{Reference}
+
+
+\subsection{Treasury architecture}
+
+
+High-level overview of Treasury components is provided on \ref{fig:ht_main_components}.
+The only feature that requires the presence of backend is subsidized transactions (this also would be extended to card fees compensation, special events, NFTs, and other activities). The core mechanics of allocating, distributing, and managing bonuses is implemented fully on-chain.
+
+\begin{figure}[h]
+  \begin{center}
+    \centering
+    \includegraphics[width=2.05\textwidth]{HolyTreasuryMainComponents.ps}
+    \caption[Figure 2]{HolyTreasury main components\label{fig:ht_main_components}}
+  \end{center}
+\end{figure}
+
+Client-side is represented by components \circled{1} (User-owned Eth Address) and \circled{2} (Application). The application could be a mobile application or other implementations (such as web- or desktop application), the keys for user Ethereum address are never transferred outside the device on which the application is running. Treasury also provides a set of idempotent view functions to the application (balances, APY metrics, etc.).
+
+On Ethereum blockchain, \circled{3} is the main Treasury contract, the application can communicate with it directly for claiming of Holyheld Bonus Token (represented by Treasury contract itself) or transferring it.
+To save on allowance for depositing tokens supported \circled{4}, centralized proxy \circled{5} is used (as for most other token interactions on Holyheld). Treasury can also deposit assets into various yield-generating pool contracts \circled{6} (acting as a user to gain yield on its assets), orchestrated by balancing and monitoring service \circled{8}.
+
+For executing subsidized transactions, the application signs messages with a private key and submits them through API gateway \circled{7}, which puts them into queue \circled{9} after initial validation. Messages are being picked up by Tx Executor service \circled{11}, which maintains persistent requests storage \circled{12} and a pool of execution wallets \circled{10}. Balancing and monitoring service maintains assets allocation and Eth balances on execution wallets to have enough gas as well as providing alerting functions. When yield harvesting occurs on a pool, Treasury acts as a regular user to keep the approach unified, so the balancing service evaluates if asset allocation matches thresholds and if it is viable to execute them.
+
+Backend architecture is fitting into the microservice approach with some of the microservices being stateless and horizontally-scalable, running in a scalable containerized environment, such as Kubernetes, while using cloud KV or database as storage, mainly not for the reason of a high number of requests, but fault tolerance. Running on infrastructure that absorbs several levels of network-related attacks (OSI layer 4 or below \cite{OSI_model} \cite{gcp_protection}) should also be considered.
+
+
+\subsection{Subsidized Tx message formats}
+
+
+This is a non-final description of data that should be included in the signed message. The format is kept concise, but including required action details that were confirmed.
+
+\medskip
+
+\begin{tabular}{ |p{3cm}|p{9cm}|  }
+ \hline
+ \multicolumn{2}{|c|}{Common message contents} \\
+ \hline
+ Data item& Description\\
+ \hline
+ \texttt{ACTION}& Action to execute (\texttt{SEND}, \texttt{SWAP}, \texttt{DEPOSIT}, \texttt{WITHDRAW})\\
+ \texttt{TIMESTAMP}& Message confirmation timestamp (when message was signed by user)\\
+ \texttt{ADDRESS\_FROM}& Address from which sending is initiated\\
+ \hline
+\end{tabular}
+
+
+\begin{tabular}{ |p{3cm}|p{9cm}|  }
+ \hline
+ \multicolumn{2}{|c|}{\texttt{SEND} message contents} \\
+ \hline
+ \texttt{ADDRESS\_TO}& Address to which sending is initiated\\
+ \texttt{TOKEN}& Address of ERC20 token to be sent\\
+ \texttt{AMOUNT}& Amount to be sent (\texttt{uint}, assuming same number of decimals as specified \texttt{TOKEN})\\
+ \hline
+\end{tabular}
+
+\begin{tabular}{ |p{3cm}|p{9cm}|  }
+ \hline
+ \multicolumn{2}{|c|}{\texttt{SWAP} message contents} \\
+ \hline
+ \texttt{TOKEN\_FROM}& Address of ERC20 token to be swapped from (present on wallet)\\
+ \texttt{TOKEN\_TO}& Address of ERC20 token to be swapped to (to be received after swap)\\
+ \texttt{AMOUNT}& Source (from) token amount to be swapped (\texttt{uint}, assuming same number of decimals as specified \texttt{TOKEN\_FROM})\\
+ \texttt{AMOUNT\_RCV\_MIN}& Minimal expected amount of \texttt{TOKEN\_TO} to be received, otherwise cancel (revert) the swap (\texttt{uint}, assuming same number of decimals as specified \texttt{TOKEN\_FROM})\\
+ \hline
+\end{tabular}
+
+\begin{tabular}{ |p{3cm}|p{9cm}|  }
+ \hline
+ \multicolumn{2}{|c|}{\texttt{DEPOSIT} message contents} \\
+ \hline
+ \texttt{TOKEN\_FROM}& Address of ERC20 token to be deposited (present on wallet)\\
+ \texttt{DESTINATION}& Address of smart contract to be deposited to (e.g. HolyPool)\\
+ \texttt{AMOUNT}& Source (from) token amount to be swapped (\texttt{uint}, assuming same number of decimals as specified \texttt{TOKEN\_FROM})\\
+ \hline
+\end{tabular}
+
+\begin{tabular}{ |p{3cm}|p{9cm}|  }
+ \hline
+ \multicolumn{2}{|c|}{\texttt{WITHDRAW} message contents} \\
+ \hline
+ \texttt{DESTINATION}& Address of smart contract from which shares should be withdrawn (e.g. HolyPool)\\
+ \texttt{AMOUNT\_SHARES} or \texttt{AMOUNT\_TOKEN}& Amount of shares (or token) to be withdrawn (\texttt{uint}, assuming same number of decimals as specified destination base asset)\\
+ \hline
+\end{tabular}
+
+
+\subsection{Main variables}
+
+\begin{hangparas}{.25in}{1}
+
+\texttt{endowment\_percentage} -- the percentage of total treasury volume that is counted as an endowment, only claimable through HH token burn;
+
+\texttt{endowment\_size} -- current valuation in base asset (USDC) of endowment Treasury portion;
+
+\texttt{bonuspool\_size} -- current valuation in base asset (USDC) of bonus pool Treasury portion;
+
+\texttt{burn\_multiplier} -- multiplier of Treasury endowment portion to pay for performing token burn along with uspent bonus (limitations described in \ref{subsec:claim_and_burn});
+
+\texttt{reserve\_base\_asset} -- the amount of base asset (USDC) to keep on Treasury contract balance for Claim \& Burn function and cheaper conversion to Eth reserves;
+
+\texttt{reserve\_eth} -- the amount of Ethereum to keep on subsidized transaction execution wallets to spend on gas;
+
+\end{hangparas}
+
+
+\bigskip
+
+\subsection{Miscellaneous implementation considerations}
+
+\begin{itemize}
+\item Even if implementation with the arbitrary number of tokens available for deposit (stakeable) tokens would
+  look more generic (more 'mathematically' correct), it would incur more gas expenses due
+  to array iteration (like pools.length in many stakeable contracts \cite{sushichef}, etc.);
+\item We are relying on contract upgradeability to arrange additional stakeable token types
+  (if it would be required);
+\item To keep contract upgrade-safe, complicated types should be avoided, but for main data mapping (described below) it \emph{should be upgrade-safe} \cite{upgradeable_map_structs};
+\end{itemize}
+
+For a single address (user), several variables would be required in storage (stored as \texttt{address => struct[uint256]} mappings):
+\begin{itemize}
+\item \texttt{staked\_HH} -- HH token amount currently deposited to Treasury;
+\item \texttt{staked\_HHLP} -- HH-ETH LP token amount currently deposited to Treasury;
+\item \texttt{reward\_tally\_HH} -- offset for calculating pending bonuses earned by HH token stake;
+\item \texttt{reward\_tally\_HHLP} -- offset for calculating pending bonuses earned by HH-LP token stake;
+\end{itemize}
+
+\texttt{balance}, \texttt{allowance} values for ERC20 Holyheld Bonus token are stored with separate mappings as defined in OpenZeppelin Upgradeable Contracts library \cite{openzeppelin_upgradeable}.
+
+
+\bibliographystyle{abbrv}
+\bibliography{simple}
+
+\begin{thebibliography}{3}
+
+\bibitem{holyheld2021}
+New 2021, New Holyheld
+\\\texttt{https://medium.com/holyheld/new-2021-new-holyheld-6980dd576fad}
+
+\bibitem{batog}
+B.Batog et al, Scalable Reward Distribution on the Ethereum Blockchain
+\\\texttt{http://batog.info/papers/scalable-reward-distribution.pdf}
+
+\bibitem{solmaz}
+O.Solmaz, Scalable Reward Distribution with Changing Stake Sizes
+\\\texttt{https://solmaz.io/2019/02/24/scalable-reward-changing/}
+
+\bibitem{sushichef}
+MasterChef contract (SushiSwap project)
+\\\texttt{https://github.com/sushiswap/sushiswap/blob/master/contracts/MasterChef.sol}
+
+\bibitem{wiki_orthogonal}
+Wikipedia: Orthogonality (programming)
+\\\texttt{https://en.wikipedia.org/wiki/Orthogonality\_(programming)}
+
+\bibitem{gasstationnetwork}
+The Gas Station Network
+\\\texttt{https://docs.openzeppelin.com/learn/sending-gasless-transactions\#gas-station-network}
+
+\bibitem{erc20permit}
+EIP-2612: permit – 712-signed approvals
+\\\texttt{https://eips.ethereum.org/EIPS/eip-2612}
+
+\bibitem{OSI_model}
+Open Systems Interconnection model (OSI model)
+\\\texttt{https://en.wikipedia.org/wiki/OSI\_model}
+
+\bibitem{gcp_protection}
+Best Practices for DDoS Protection and Mitigation on Google Cloud Platform
+\\\texttt{https://cloud.google.com/files/GCPDDoSprotection-04122016.pdf}
+
+\bibitem{upgradeable_map_structs}
+Upgrades with Peace of Mind: “Structs” Edition
+\\\texttt{https://forum.openzeppelin.com/t/upgrades-with-peace-of-mind-structs-edition/5526}
+
+\bibitem{openzeppelin_upgradeable}
+OpenZeppelin Contracts Upgradeable
+\\\texttt{https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable}
+
+\end{thebibliography}
+\end{document}
