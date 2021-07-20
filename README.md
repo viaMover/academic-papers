@@ -14,4 +14,13 @@ The Yellow Paper for the Smart Treasury implementation.
 
 You can read the paper here - [PDF](holytreasury/HolyTreasury.pdf). 
 
-In short, it is a piggy bank account that automatically distributes Mober performance rewards to the users in a permissionless way, allowing for subsidized and gasless transactions. If you like transaction costs, card costs, and all costs to be covered, the Smart Treasury is what you need. 
+In short, it is a piggy bank account that automatically distributes Mover performance rewards to the users in a permissionless way, allowing for subsidized and gasless transactions. If you like transaction costs, card costs, and all costs to be covered, the Smart Treasury is what you need. 
+
+### Pylons
+![](https://cdn-images-1.medium.com/max/2400/1*fDOG9dji5E_p-rf98RlR5Q.png)
+
+The Yellow Paper for the Pylons implementation. 
+
+You can read the paper here - [PDF](). 
+
+In short, it is a smart contract that serves as a security middleware layer. It provides means to implement access separation, integration with security roles defined in other smart contracts, and means to provide safe execution of various smart contract calls by trusted third parties. Pylons are designed to introduce minimal gas overhead for transaction execution and concise structure to stay manageable and transparent.
