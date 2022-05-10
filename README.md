@@ -24,3 +24,12 @@ The Yellow Paper for the Pylons implementation.
 You can read the paper here - [PDF](pylon/mover_pylon.pdf). 
 
 In short, it is a smart contract that serves as a security middleware layer. It provides means to implement access separation, integration with security roles defined in other smart contracts, and means to provide safe execution of various smart contract calls by trusted third parties. Pylons are designed to introduce minimal gas overhead for transaction execution and concise structure to stay manageable and transparent.
+
+### Our Vision
+![](https://cdn-images-1.medium.com/max/1600/1*u6FWedCtdp7Q-R5AtrgZ5A.png)
+
+What our future is going to look like? And why Mover is differrent. 
+
+You can read the paper here - [PDF](The%20future%20we%20shape.pdf). 
+
+
